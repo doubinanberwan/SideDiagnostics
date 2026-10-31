@@ -841,18 +841,23 @@ namespace SidebarDiagnostics.Windows
 
         private static Monitor GetMonitorFromIndex(int index, Monitor[] monitors)
         {
-            if (index < monitors.Length)
+            if (index >= 0 && index < monitors.Length)
                 return monitors[index];
             else
                 return monitors.GetPrimary();
         }
 
-        public static void GetWorkArea(AppBarWindow window, out int screen, out DockEdge edge, out WorkArea initPos, out WorkArea windowWA, out WorkArea appbarWA)
+        public static void GetWorkArea(AppBarWindow window, out int screen, out DockEdge edge, out WorkArea initPos, out WorkArea windowWA, out WorkArea appbarWA, out double scaleX, out double scaleY)
         {
             screen = Framework.Settings.Instance.ScreenIndex;
             edge = Framework.Settings.Instance.DockEdge;
 
             double _uiScale = Framework.Settings.Instance.UIScale;
+
+            if (_uiScale <= 0d)
+            {
+                _uiScale = 1d;
+            }
 
             if (OS.SupportDPI)
             {
@@ -861,43 +866,31 @@ namespace SidebarDiagnostics.Windows
 
             Monitor[] _monitors = GetMonitors();
 
-            Monitor _primary = _monitors.GetPrimary();
             Monitor _active = GetMonitorFromIndex(screen, _monitors);
 
-            initPos = new WorkArea()
-            {
-                Top = _active.WorkArea.Top,
-                Left = _active.WorkArea.Left,
-                Bottom = _active.WorkArea.Top + 10,
-                Right = _active.WorkArea.Left + 10
-            };
+            scaleX = _active.ScaleX > 0d ? _active.ScaleX : 1d;
+            scaleY = _active.ScaleY > 0d ? _active.ScaleY : 1d;
 
-            windowWA = Windows.WorkArea.FromRECT(_active.WorkArea);
-            windowWA.Scale(_active.InverseScaleX, _active.InverseScaleY);
-
-            double _modifyX = 0d;
-            double _modifyY = 0d;
-
-            windowWA.Offset(_modifyX, _modifyY);
-
-            double _windowWidth = Framework.Settings.Instance.SidebarWidth * _uiScale;
-
-            windowWA.SetWidth(edge, _windowWidth);
+            // Win32 rects (MONITORINFO / RECT / APPBARDATA) are physical device pixels.
+            // The DPI factor of the *target* monitor is applied here instead of the primary one.
+            double _windowWidth = Framework.Settings.Instance.SidebarWidth * _uiScale * scaleX;
 
             int _offsetX = Framework.Settings.Instance.XOffset;
             int _offsetY = Framework.Settings.Instance.YOffset;
 
-            windowWA.Offset(_offsetX, _offsetY);
+            // Throwaway rect used to move the window onto the target monitor before ABM_NEW,
+            // so the window DPI is already correct when the final rect is applied.
+            initPos = Windows.WorkArea.FromRECT(_active.WorkArea);
+            initPos.Right = initPos.Left + 10d;
+            initPos.Bottom = initPos.Top + 10d;
+
+            windowWA = Windows.WorkArea.FromRECT(_active.WorkArea);
+            windowWA.SetWidth(edge, _windowWidth);
+            windowWA.Offset(_offsetX * scaleX, _offsetY * scaleY);
 
             appbarWA = Windows.WorkArea.FromRECT(_active.WorkArea);
-
-            appbarWA.Offset(_modifyX, _modifyY);
-
-            double _appbarWidth = Framework.Settings.Instance.UseAppBar ? windowWA.Width * _active.ScaleX : 0;
-
-            appbarWA.SetWidth(edge, _appbarWidth);
-
-            appbarWA.Offset(_offsetX, _offsetY);
+            appbarWA.SetWidth(edge, Framework.Settings.Instance.UseAppBar ? _windowWidth : 0d);
+            appbarWA.Offset(_offsetX * scaleX, _offsetY * scaleY);
         }
     }
 
@@ -911,9 +904,10 @@ namespace SidebarDiagnostics.Windows
 
     public partial class DPIAwareWindow : FlatWindow
     {
-        private static class WM_MESSAGES
+        internal static class WM_MESSAGES
         {
             public const int WM_DPICHANGED = 0x02E0;
+            public const int WM_DISPLAYCHANGE = 0x007E;
             public const int WM_GETMINMAXINFO = 0x0024;
             public const int WM_SIZE = 0x0005;
             public const int WM_WINDOWPOSCHANGING = 0x0046;
@@ -955,6 +949,16 @@ namespace SidebarDiagnostics.Windows
 
         public void UpdateScale(double scaleX, double scaleY, bool resize)
         {
+            if (scaleX <= 0d)
+            {
+                scaleX = 1d;
+            }
+
+            if (scaleY <= 0d)
+            {
+                scaleY = 1d;
+            }
+
             if (VisualChildrenCount > 0)
             {
                 GetVisualChild(0).SetValue(LayoutTransformProperty, new ScaleTransform(scaleX, scaleY));
@@ -977,8 +981,6 @@ namespace SidebarDiagnostics.Windows
             HandleDPI();
 
             Framework.Settings.Instance.PropertyChanged += UIScale_PropertyChanged;
-
-            //HwndSource.AddHook(WindowHook);
         }
 
         private void UIScale_PropertyChanged(object sender, PropertyChangedEventArgs e)
@@ -988,18 +990,6 @@ namespace SidebarDiagnostics.Windows
                 HandleDPI();
             }
         }
-
-        //private IntPtr WindowHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
-        //{
-        //    if (msg == WM_MESSAGES.WM_DPICHANGED)
-        //    {
-        //        HandleDPI();
-
-        //        handled = true;
-        //    }
-
-        //    return IntPtr.Zero;
-        //}
 
         public HwndSource HwndSource
         {
@@ -1047,9 +1037,9 @@ namespace SidebarDiagnostics.Windows
             }
         }
 
-        private double _originalWidth { get; set; }
+        protected double _originalWidth { get; set; }
 
-        private double _originalHeight { get; set; }
+        protected double _originalHeight { get; set; }
     }
 
     [Serializable]
@@ -1126,6 +1116,7 @@ namespace SidebarDiagnostics.Windows
 
             public const uint SWP_NOSIZE = 0x0001;
             public const uint SWP_NOMOVE = 0x0002;
+            public const uint SWP_NOZORDER = 0x0004;
             public const uint SWP_NOACTIVATE = 0x0010;
         }
 
@@ -1162,21 +1153,151 @@ namespace SidebarDiagnostics.Windows
             Loaded += AppBarWindow_Loaded;
         }
 
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
+
+            HwndSource _source = HwndSource;
+
+            if (_source != null)
+            {
+                _source.AddHook(DisplayChangeHook);
+            }
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            HwndSource _source = HwndSource;
+
+            if (_source != null)
+            {
+                _source.RemoveHook(DisplayChangeHook);
+            }
+
+            if (_cancelReposition != null)
+            {
+                _cancelReposition.Cancel();
+                _cancelReposition.Dispose();
+                _cancelReposition = null;
+            }
+
+            base.OnClosed(e);
+        }
+
         private void AppBarWindow_Loaded(object sender, RoutedEventArgs e)
         {
             PreventMove();
         }
 
-        public void Move(WorkArea workArea)
+        /// <summary>
+        /// Places the window on the given rect. The rect is in physical device pixels, the same
+        /// space as MONITORINFO / APPBARDATA. WPF's Left/Top/Width/Height are 96-DPI logical
+        /// units resolved against the DPI of the monitor the window sits on, so the conversion
+        /// uses the DPI of the *target* monitor - never the static system DPI.
+        /// </summary>
+        public void Move(WorkArea workArea, double scaleX, double scaleY)
         {
             AllowMove();
 
-            Left = workArea.Left;
-            Top = workArea.Top;
-            Width = workArea.Width;
-            Height = workArea.Height;
+            double _uiScale = Framework.Settings.Instance.UIScale;
+
+            if (_uiScale <= 0d)
+            {
+                _uiScale = 1d;
+            }
+
+            if (scaleX <= 0d)
+            {
+                scaleX = 1d;
+            }
+
+            if (scaleY <= 0d)
+            {
+                scaleY = 1d;
+            }
+
+            // Physical -> logical for the window bounds
+            base.Left = workArea.Left / scaleX;
+            base.Top = workArea.Top / scaleY;
+            base.Width = workArea.Width / scaleX;
+            base.Height = workArea.Height / scaleY;
+
+            // store the unscaled design size so UpdateScale() can never compound the UI scale
+            _originalWidth = workArea.Width / (scaleX * _uiScale);
+            _originalHeight = workArea.Height / (scaleY * _uiScale);
+
+            // The properties above are resolved by WPF with the DPI of the monitor the window
+            // is *currently* on, which is the wrong one while it still sits on another monitor.
+            // Enforce the exact physical rect so the first pass already lands correctly.
+            NativeMethods.SetWindowPos(
+                new WindowInteropHelper(this).Handle,
+                IntPtr.Zero,
+                (int)Math.Round(workArea.Left),
+                (int)Math.Round(workArea.Top),
+                (int)Math.Round(workArea.Width),
+                (int)Math.Round(workArea.Height),
+                HWND_FLAG.SWP_NOZORDER | HWND_FLAG.SWP_NOACTIVATE
+                );
 
             PreventMove();
+        }
+
+        private IntPtr DisplayChangeHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            if (msg == WM_MESSAGES.WM_DPICHANGED || msg == WM_MESSAGES.WM_DISPLAYCHANGE)
+            {
+                // deliberately not handled: WPF still has to update its own DPI state first
+                RepositionForDisplayChange();
+            }
+
+            return IntPtr.Zero;
+        }
+
+        /// <summary>
+        /// Re-docks on the target monitor after a DPI change or a monitor hot-plug.
+        /// Bursts of notifications are coalesced into a single re-dock.
+        /// </summary>
+        private void RepositionForDisplayChange()
+        {
+            if (!IsLoaded || !IsAppBar)
+            {
+                return;
+            }
+
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.BeginInvoke(DispatcherPriority.Normal, (Action)RepositionForDisplayChange);
+
+                return;
+            }
+
+            if (_cancelReposition != null)
+            {
+                _cancelReposition.Cancel();
+                _cancelReposition.Dispose();
+            }
+
+            _cancelReposition = new CancellationTokenSource();
+
+            CancellationToken _token = _cancelReposition.Token;
+
+            Task.Delay(150, _token).ContinueWith(t =>
+            {
+                if (t.IsCanceled)
+                {
+                    return;
+                }
+
+                Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, (Action)(async () =>
+                {
+                    if (_token.IsCancellationRequested || !IsAppBar)
+                    {
+                        return;
+                    }
+
+                    await SetAppBar();
+                }));
+            }, TaskScheduler.Default);
         }
 
         private void PreventMove()
@@ -1367,23 +1488,53 @@ namespace SidebarDiagnostics.Windows
 
         public async Task SetAppBar()
         {
-            ClearAppBar();
-
-            await Task.Delay(100).ContinueWith(async (_) =>
+            if (_appBarBusy)
             {
+                _appBarPending = true;
+
+                return;
+            }
+
+            _appBarBusy = true;
+
+            try
+            {
+                ClearAppBar();
+
+                await Task.Delay(100);
+
                 await Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, (Action)(async () =>
                 {
-                    await BindAppBar();
-                }));
-            });
+                    try
+                    {
+                        await BindAppBar();
+                    }
+                    finally
+                    {
+                        _appBarBusy = false;
 
+                        if (_appBarPending)
+                        {
+                            _appBarPending = false;
+
+                            await SetAppBar();
+                        }
+                    }
+                }));
+            }
+            catch
+            {
+                _appBarBusy = false;
+
+                throw;
+            }
         }
         
         private async Task BindAppBar()
         {
-            Monitor.GetWorkArea(this, out int screen, out DockEdge edge, out WorkArea initPos, out WorkArea windowWA, out WorkArea appbarWA);
+            Monitor.GetWorkArea(this, out int screen, out DockEdge edge, out WorkArea initPos, out WorkArea windowWA, out WorkArea appbarWA, out double scaleX, out double scaleY);
 
-            Move(initPos);
+            Move(initPos, scaleX, scaleY);
 
             APPBARDATA _data = NewData();
 
@@ -1407,6 +1558,8 @@ namespace SidebarDiagnostics.Windows
 
             NativeMethods.SHAppBarMessage(APPBARMSG.ABM_SETPOS, ref _data);
 
+            _lastAppBarUpdate = DateTime.UtcNow;
+
             IsAppBar = true;
 
             appbarWA.Left = _data.rc.Left;
@@ -1416,9 +1569,19 @@ namespace SidebarDiagnostics.Windows
 
             AppBarWidth = appbarWA.Width;
 
+            // ABM_QUERYPOS may clamp the reserved rect (e.g. against the taskbar); when the
+            // appbar is used, the window has to fill exactly that clamped rect.
+            if (Framework.Settings.Instance.UseAppBar)
+            {
+                windowWA.Left = appbarWA.Left;
+                windowWA.Top = appbarWA.Top;
+                windowWA.Right = appbarWA.Right;
+                windowWA.Bottom = appbarWA.Bottom;
+            }
+
             await Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, (Action)(() =>
             {
-                Move(windowWA);
+                Move(windowWA, scaleX, scaleY);
             }));
 
             await Task.Delay(500).ContinueWith(async (_) =>
@@ -1482,7 +1645,11 @@ namespace SidebarDiagnostics.Windows
                 switch (wParam.ToInt32())
                 {
                     case APPBARNOTIFY.ABN_POSCHANGED:
-                        SetAppBar();
+                        // ignore the echo of our own ABM_SETPOS to avoid a re-dock loop
+                        if ((DateTime.UtcNow - _lastAppBarUpdate).TotalMilliseconds > 500d)
+                        {
+                            SetAppBar();
+                        }
                         break;
 
                     case APPBARNOTIFY.ABN_FULLSCREENAPP:
@@ -1529,5 +1696,11 @@ namespace SidebarDiagnostics.Windows
         private int _callbackID { get; set; }
 
         private CancellationTokenSource _cancelReposition { get; set; }
+
+        private bool _appBarBusy { get; set; } = false;
+
+        private bool _appBarPending { get; set; } = false;
+
+        private DateTime _lastAppBarUpdate { get; set; } = DateTime.MinValue;
     }
 }

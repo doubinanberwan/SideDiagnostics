@@ -17,7 +17,9 @@
 
             <command:ActivateCommand x:Key="ShowCommand" />
 
-            <tb:TaskbarIcon x:Key="TrayIcon" IconSource="Sidebar.ico" LeftClickCommand="{StaticResource ShowCommand}">
+            <!-- Native Win32 string tooltip only: no TrayToolTip / TrayPopup, which is what
+                 used to be placed at the desktop origin (0, 0) under high DPI. -->
+            <tb:TaskbarIcon x:Key="TrayIcon" IconSource="Sidebar.ico" ToolTipText="{x:Static frame:Resources.AppName}" TrayToolTip="{x:Null}" LeftClickCommand="{StaticResource ShowCommand}">
                 <tb:TaskbarIcon.ContextMenu>
                     <ContextMenu>
                         <MenuItem Header="{x:Static frame:Resources.ButtonSettings}" Click="Settings_Click" />

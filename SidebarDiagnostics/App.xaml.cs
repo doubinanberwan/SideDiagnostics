@@ -52,7 +52,6 @@ namespace SidebarDiagnostics
             // TRAY ICON
             TrayIcon = (TaskbarIcon)FindResource("TrayIcon");
             TrayIcon.ToolTipText = string.Format("{0} v{1}", Framework.Resources.AppName, _vstring);
-            TrayIcon.TrayContextMenuOpen += TrayIcon_TrayContextMenuOpen;
 
             // START APP
             if (Framework.Settings.Instance.InitialSetup)
@@ -214,14 +213,6 @@ namespace SidebarDiagnostics
             }
 
             Framework.Settings.Instance.MonitorConfig = MonitorConfig.CheckConfig(Framework.Settings.Instance.MonitorConfig);
-        }
-
-        private void TrayIcon_TrayContextMenuOpen(object sender, RoutedEventArgs e)
-        {
-            Monitor _primary = Monitor.GetMonitors().GetPrimary();
-
-            TrayIcon.ContextMenu.HorizontalOffset *= _primary.InverseScaleX;
-            TrayIcon.ContextMenu.VerticalOffset *= _primary.InverseScaleY;
         }
 
         private void Settings_Click(object sender, EventArgs e)

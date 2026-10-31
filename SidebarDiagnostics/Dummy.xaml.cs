@@ -21,13 +21,13 @@ namespace SidebarDiagnostics
 
         public void Reposition()
         {
-            Monitor.GetWorkArea(this, out int _screen, out DockEdge _edge, out WorkArea _initPos, out WorkArea _windowWA, out WorkArea _appbarWA);
+            Monitor.GetWorkArea(this, out int _screen, out DockEdge _edge, out WorkArea _initPos, out WorkArea _windowWA, out WorkArea _appbarWA, out double _scaleX, out double _scaleY);
 
-            Move(_initPos);
+            Move(_initPos, _scaleX, _scaleY);
 
             Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, (Action)(() =>
             {
-                Move(_windowWA);
+                Move(_windowWA, _scaleX, _scaleY);
             }));
         }
 
